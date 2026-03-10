@@ -1,3 +1,9 @@
+#ifdef _DEBUG
+    #define DEBUG_LOG(msg) OutputDebugStringA(msg)
+#else
+    #define DEBUG_LOG(msg)
+#endif
+
 #pragma comment(linker, "/subsystem:windows")
 
 #include <iostream>
@@ -148,7 +154,7 @@ LRESULT CALLBACK Wndproc(
 
 			glViewport(0, 0, width, height);
 
-			OutputDebugStringA("WM_SIZE\n");
+			DEBUG_LOG("WM_SIZE\n");
 		}break;
 		
 		case WM_CHAR: {
@@ -192,7 +198,7 @@ LRESULT CALLBACK Wndproc(
 				strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "Enter octave delay (ms) and press Enter to confirm: ");
 				text_needs_update = 1;
 				
-				OutputDebugStringA("Entering octave delay edit mode\n");
+				DEBUG_LOG("Entering octave delay edit mode\n");
 				return 0;
 			}
 
@@ -216,7 +222,7 @@ LRESULT CALLBACK Wndproc(
 							sprintf_s(buf, sizeof(buf), "Octave delay set to: %dms Save with F6", octave_shift_delay);
 							strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
 							
-							OutputDebugStringA(buf);
+							DEBUG_LOG(buf);
 						} else {
 							strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "Invalid delay! Must be 20-500ms");
 						}
@@ -267,7 +273,7 @@ LRESULT CALLBACK Wndproc(
 			if (w_param == VK_F7 && rebind_target_note == -1) {
 				clear_display();
 				text_needs_update = 1;
-				OutputDebugStringA("Text display cleared!\n");
+				DEBUG_LOG("Text display cleared!\n");
 				return 0;
 			}
 
@@ -275,7 +281,7 @@ LRESULT CALLBACK Wndproc(
     		if (w_param == VK_F8 && app_mode == MODE_NORMAL) {
                 clear_display();
 				app_mode = MODE_REBINDING_OCTAVE_DOWN;
-				OutputDebugStringA("REBINDING MODE: Set octave DOWN key\n");
+				DEBUG_LOG("REBINDING MODE: Set octave DOWN key\n");
 				strcpy_s(midi_key_display, MAX_INPUT_LENGTH, 
 						"REBIND MODE - Press key for OCTAVE DOWN");
 				text_needs_update = 1;
@@ -286,7 +292,7 @@ LRESULT CALLBACK Wndproc(
 			if (w_param == VK_F8 && app_mode != MODE_NORMAL) {
 				app_mode = MODE_NORMAL;
 				rebind_target_note = -1;
-				OutputDebugStringA("REBINDING MODE DISABLED\n");
+				DEBUG_LOG("REBINDING MODE DISABLED\n");
 				strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "Rebinding finished save with F6!");
 				text_needs_update = 1;
 				return 0;
@@ -322,7 +328,7 @@ LRESULT CALLBACK Wndproc(
 				strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
 				text_needs_update = 1;
 				
-				OutputDebugStringA("Octave DOWN key set, moving to octave UP\n");
+				DEBUG_LOG("Octave DOWN key set, moving to octave UP\n");
 				app_mode = MODE_REBINDING_OCTAVE_UP;
 				return 0;
 			}
@@ -358,7 +364,7 @@ LRESULT CALLBACK Wndproc(
 				strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
 				text_needs_update = 1;
 				
-				OutputDebugStringA("Octave UP key set, moving to note rebinding\n");
+				DEBUG_LOG("Octave UP key set, moving to note rebinding\n");
 				app_mode = MODE_REBINDING_NOTES;
 				return 0;
 			}
@@ -403,7 +409,7 @@ LRESULT CALLBACK Wndproc(
 					sprintf_s(buf, sizeof(buf), 
 							"Bound MIDI note %d to: %s (scancode %d)\n",
 							rebind_target_note, combo_str, scancode);
-					OutputDebugStringA(buf);
+					DEBUG_LOG(buf);
 					
 					sprintf_s(buf, sizeof(buf), 
 							"Saved: %s - Press another MIDI key or F8 to exit", combo_str);
@@ -418,7 +424,7 @@ LRESULT CALLBACK Wndproc(
 			//F9 to copy text to clipboard
 			if (w_param == VK_F9 && rebind_target_note == -1) {
 				copy_to_clipboard(midi_key_display);
-				OutputDebugStringA("Text copied to clipboard!\n");
+				DEBUG_LOG("Text copied to clipboard!\n");
 				return 0;
 			}
 
@@ -440,19 +446,19 @@ LRESULT CALLBACK Wndproc(
 
 		case WM_DESTROY:
 		{
-			OutputDebugStringA("WM_DESTROY\n");
+			DEBUG_LOG("WM_DESTROY\n");
 			PostQuitMessage(0);
 		}break;
 
 		case WM_CLOSE:
 		{
-			OutputDebugStringA("WM_CLOSE\n");
+			DEBUG_LOG("WM_CLOSE\n");
 			DestroyWindow(window_handle);
 		}break;
 
 		case WM_ACTIVATEAPP:
 		{
-			OutputDebugStringA("WM_ACTIVATEAPP\n");
+			DEBUG_LOG("WM_ACTIVATEAPP\n");
 		}break;
 
 		case WM_PAINT:
@@ -597,8 +603,8 @@ void CALLBACK midi_callback(HMIDIIN hMidiIn, UINT wMsg,
             strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
             text_needs_update = 1;
             
-            OutputDebugStringA(buf);
-            OutputDebugStringA("\n");
+            DEBUG_LOG(buf);
+            DEBUG_LOG("\n");
             return;
         }
         
@@ -734,7 +740,7 @@ void init_midi()
 
     UINT count = midiInGetNumDevs();
     if (count == 0) {
-        OutputDebugStringA("No MIDI devices found.\n");
+        DEBUG_LOG("No MIDI devices found.\n");
         return;
     }
 
@@ -747,12 +753,12 @@ void init_midi()
     );
 
     if (result != MMSYSERR_NOERROR) {
-        OutputDebugStringA("Failed to open MIDI device.\n");
+        DEBUG_LOG("Failed to open MIDI device.\n");
         return;
     }
 
     midiInStart(midi_in);
-    OutputDebugStringA("MIDI listening...\n");
+    DEBUG_LOG("MIDI listening...\n");
 }
 
 
@@ -910,7 +916,7 @@ int       nShowCmd)
 	if (!success) {
 		char info_log[512];
 		glGetProgramInfoLog(shader_program, 512, NULL, info_log);
-		OutputDebugStringA(info_log);
+		DEBUG_LOG(info_log);
 	}
 		
 	glDeleteShader(vertex_shader);
@@ -925,7 +931,7 @@ int       nShowCmd)
 	if (!success) {
 		char info_log[512];
 		glGetProgramInfoLog(font_shader_program, 512, NULL, info_log);
-		OutputDebugStringA(info_log);
+		DEBUG_LOG(info_log);
 	}
 
 	glDeleteShader(font_vert);
@@ -942,7 +948,7 @@ int       nShowCmd)
 	//Font Textures
 	GLuint font_tex = load_texture("Assets/Fonts/atlas.png");
 	if (font_tex == 0) {
-		OutputDebugStringA("ERROR: Failed to load font texture!\n");
+		DEBUG_LOG("ERROR: Failed to load font texture!\n");
 	}
 
 	//Ping Measure init
@@ -954,7 +960,7 @@ int       nShowCmd)
 
 	parse_json("Assets/Fonts/atlas.json");
 	if (glyphs['H'].advance == 0.0f) {
-    	OutputDebugStringA("ERROR: Glyphs not loaded!\n");
+    	DEBUG_LOG("ERROR: Glyphs not loaded!\n");
 	}
 	
 	int text_vert_count = 0;

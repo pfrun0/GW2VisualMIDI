@@ -15,7 +15,7 @@ void print_ip_from_decimal(DWORD decimal_ip)
     char buf[64];
     sprintf_s(buf, sizeof(buf), "IP: %d.%d.%d.%d\n", 
              bytes[0], bytes[1], bytes[2], bytes[3]);
-    OutputDebugStringA(buf);
+    DEBUG_LOG(buf);
 }
 
 bool find_gw2_connection(allocator_i *allocator)
@@ -54,12 +54,12 @@ bool find_gw2_connection(allocator_i *allocator)
     if (gw2_window != NULL) {
         GetWindowThreadProcessId(gw2_window, &gw2_pid);
 		sprintf_s(buf, sizeof(buf), "Guild wars 2 pID is : %d\n", gw2_pid);
-        OutputDebugStringA(buf);
+        DEBUG_LOG(buf);
     }
     
     if (gw2_pid == 0) {
         gw2_conn.is_valid = false;
-		OutputDebugStringA("Guild wars 2 not found or is not open \n");
+		DEBUG_LOG("Guild wars 2 not found or is not open \n");
         return false;
     }
     
@@ -110,11 +110,11 @@ bool find_gw2_ping(DWORD *out_rtt_ms)
 		print_ip_from_decimal(gw2_conn.connection_row.dwRemoteAddr);
         char buf[128];
 		sprintf_s(buf, sizeof(buf), "GW2 Ping is: %d\n", *out_rtt_ms);
-        OutputDebugStringA(buf);
+        DEBUG_LOG(buf);
         return true;
     } else {
         gw2_conn.is_valid = false;
-		OutputDebugStringA("Couldn't find ping, GW2 connection not active");
+		DEBUG_LOG("Couldn't find ping, GW2 connection not active");
         return false;
     }
 }

@@ -204,7 +204,7 @@ void save_keybindings(const char *filename) {
     FILE *f;
     fopen_s(&f, filename, "w");
     if (!f) {
-        OutputDebugStringA("Failed to save keybindings\n");
+        DEBUG_LOG("Failed to save keybindings\n");
         return;
     }
     fprintf(f, "OCTAVE_DELAY\n");
@@ -233,14 +233,14 @@ void save_keybindings(const char *filename) {
     }
     
     fclose(f);
-    OutputDebugStringA("Keybindings saved!\n");
+    DEBUG_LOG("Keybindings saved!\n");
 }
 
 void load_keybindings(const char *filename) {
     FILE *f;
     fopen_s(&f, filename, "r");
     if (!f) {
-        OutputDebugStringA("No saved keybindings found, using defaults\n");
+        DEBUG_LOG("No saved keybindings found, using defaults\n");
         return;
     }
     
@@ -264,9 +264,9 @@ void load_keybindings(const char *filename) {
                     
                     char buf[128];
                     sprintf_s(buf, sizeof(buf), "Loaded octave delay: %dms\n", octave_shift_delay);
-                    OutputDebugStringA(buf);
+                    DEBUG_LOG(buf);
                 } else {
-                    OutputDebugStringA("Invalid octave delay in file, using default\n");
+                    DEBUG_LOG("Invalid octave delay in file, using default\n");
                 }
             }
             mode = 0;
@@ -307,7 +307,7 @@ void load_keybindings(const char *filename) {
     }
     
     fclose(f);
-    OutputDebugStringA("Keybindings loaded!\n");
+    DEBUG_LOG("Keybindings loaded!\n");
 }
 
 void restore_default_keybindings() {
@@ -342,7 +342,7 @@ void restore_default_keybindings() {
         display_map[i] = default_display[i];
     }
     
-    OutputDebugStringA("Keybindings restored to defaults!\n");
+    DEBUG_LOG("Keybindings restored to defaults!\n");
 }
 
 KeyCombo* midi_note_to_key_combo(int note, int starter_note)
