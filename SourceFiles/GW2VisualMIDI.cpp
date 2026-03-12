@@ -18,6 +18,8 @@
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
+#include <Dbt.h>
+
 #include "allocator.h"
 #include "shader_compile.h"
 
@@ -54,6 +56,12 @@ char octave_delay_input[16] = "";
 int octave_delay_input_length = 0;
 int octave_shift_delay = 70; //Default octave switch delay
 
+HMIDIIN midi_in = NULL;
+int midi_selected_index = 0;
+int midi_confirmed_index = 0;
+bool midi_selecting = false;
+allocator_i *g_allocator = NULL;
+
 #include "gw2_ping.inl"  
 #include "key_press.inl"
 
@@ -64,6 +72,226 @@ void clear_display()
 				midi_display_length = 0;
 				viewport_start = 0;
 };
+
+void CALLBACK midi_callback(HMIDIIN hMidiIn, UINT wMsg,
+                            DWORD_PTR dwInstance,
+                            DWORD_PTR msg, DWORD_PTR timestamp)
+{
+    if (wMsg != MIM_DATA)
+        return;
+
+    DWORD data = (DWORD)msg;
+    int status = data & 0xF0; 
+    int note   = (data >> 8) & 0x7F;
+    int vel    = (data >> 16) & 0x7F;
+
+    char buf[256];
+    int starter_note = cstarter_note();
+    
+    if (status == 0x90 && vel > 0)
+    {
+        // REBINDING MODE 
+        if (app_mode == MODE_REBINDING_NOTES) {
+            rebind_target_note = note;
+            
+            int offset = note - starter_note;
+            sprintf_s(buf, sizeof(buf), 
+                     "MIDI note %d (offset %d) - Press keybind...", 
+                     note, offset);
+            strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
+            text_needs_update = 1;
+            
+            DEBUG_LOG(buf);
+            DEBUG_LOG("\n");
+            return;
+        }
+        
+        if (app_mode != MODE_NORMAL) {
+            return;
+        }
+        
+        bool octave_shifted = false;
+
+        // NORMAL MODE
+        if(note >= starter_note + 13) {
+            shift_octave(true);
+			octave_shifted = true;
+        }
+        else if(note <= starter_note - 1) {
+            shift_octave(false);
+			octave_shifted = true;
+        }
+
+		 if (octave_shifted) {
+			if(get_gw2_ping(g_allocator, &gw2_ping))
+			{
+				Sleep(gw2_ping);
+			}
+			else
+			{
+            	Sleep(octave_shift_delay); 
+			}
+            starter_note = cstarter_note(); 
+        }
+        
+        key_pressed_note[note] = 1;
+        
+        KeyCombo *combo = midi_note_to_key_combo(note, starter_note);
+        
+        if (combo == NULL) {
+            return;
+        }
+        
+        //Release modifiers
+        INPUT release_mods[3] = {0};
+        int mod_count = 0;
+        
+        //Shift
+        if (!combo->use_shift) {
+            release_mods[mod_count].type = INPUT_KEYBOARD;
+            release_mods[mod_count].ki.wScan = 42;
+            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+            mod_count++;
+        }
+        
+        //Ctrl
+        if (!combo->use_ctrl) {
+            release_mods[mod_count].type = INPUT_KEYBOARD;
+            release_mods[mod_count].ki.wScan = 29;
+            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+            mod_count++;
+        }
+        
+        //Alt
+        if (!combo->use_alt) {
+            release_mods[mod_count].type = INPUT_KEYBOARD;
+            release_mods[mod_count].ki.wScan = 56;
+            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+            mod_count++;
+        }
+
+        //Releases	
+        if (mod_count > 0) {
+            SendInput(mod_count, release_mods, sizeof(INPUT));
+        }
+        press_key_combo(combo);
+		note_combo_map[note] = *combo;
+        
+        char display_char = midi_note_to_display_char(note, starter_note);
+        char combo_str[128];
+        get_combo_display_string(combo, display_char, combo_str, sizeof(combo_str));
+        
+        //Update piano visual
+        for (int i = 0; i < NUM_KEYS; i++) {
+            if (piano_keys[i].midi_note == note) {
+                piano_keys[i].is_pressed = 1;
+                break;
+            }
+        }
+        
+        if (midi_display_length < MAX_INPUT_LENGTH - 20) {
+            sprintf_s(buf, sizeof(buf), "%s ", combo_str);
+            strcat_s(midi_key_display, MAX_INPUT_LENGTH, buf);
+            midi_display_length = (int)strlen(midi_key_display);
+
+            //Auto scroll
+            if (midi_display_length > viewport_start + viewport_max_chars) {
+                viewport_start = midi_display_length - viewport_max_chars;
+            }
+
+            text_needs_update = 1;
+        }
+    }
+    
+    if(status == 0x80) {
+        if (app_mode != MODE_NORMAL) {
+            return;
+        }
+        
+        key_pressed_note[note] = 0;
+         KeyCombo *combo = &note_combo_map[note];
+
+        if (combo == NULL) {
+            return;
+        }
+        
+        release_key_combo(combo);
+        
+        for (int i = 0; i < NUM_KEYS; i++) {
+            if (piano_keys[i].midi_note == note) {
+                piano_keys[i].is_pressed = 0;
+                break;
+            }
+        }
+
+		note_combo_map[note].scancode = 0;
+		note_combo_map[note].use_shift = false;
+		note_combo_map[note].use_ctrl = false;
+		note_combo_map[note].use_alt = false;
+    }
+}
+
+void show_midi_device_selection()
+{
+    UINT count = midiInGetNumDevs();
+    if (count == 0) {
+        strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "No MIDI devices found");
+        text_needs_update = 1;
+        return;
+    }
+    MIDIINCAPSA caps;
+    midiInGetDevCapsA(midi_selected_index, &caps, sizeof(caps));
+    char buf[256];
+    sprintf_s(buf, sizeof(buf), "MIDI Device [%d/%d]: %s  (Right Ctrl to cycle, Enter to confirm)",
+              midi_selected_index + 1, count, caps.szPname);
+    strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
+    text_needs_update = 1;
+}
+
+void reset_midi()
+{
+    if (midi_in != NULL) {
+        midiInStop(midi_in);
+        midiInClose(midi_in);
+        midi_in = NULL;
+    }
+}
+
+void init_midi(int device_index)
+{
+    reset_midi();
+
+    UINT count = midiInGetNumDevs();
+    if (count == 0) {
+        DEBUG_LOG("No MIDI devices found.\n");
+        return;
+    }
+
+    if (device_index >= (int)count) device_index = 0;
+    midi_confirmed_index = device_index;
+
+    MIDIINCAPSA caps;
+    midiInGetDevCapsA(device_index, &caps, sizeof(caps));
+
+    MMRESULT result = midiInOpen(
+        &midi_in,
+        device_index,
+        (DWORD_PTR)midi_callback,
+        0,
+        CALLBACK_FUNCTION
+    );
+
+    if (result != MMSYSERR_NOERROR) {
+        midi_in = NULL;
+        DEBUG_LOG("Failed to open MIDI device.\n");
+        return;
+    }
+
+    midiInStart(midi_in);
+    char buf[128];
+    sprintf_s(buf, sizeof(buf), "MIDI connected: %s\n", caps.szPname);
+    DEBUG_LOG(buf);
+}
 
 typedef HGLRC (WINAPI * PFNWGLCREATECONTEXTATTRIBSARBPROC)(HDC, HGLRC, const int*);
 PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB = NULL;
@@ -114,37 +342,64 @@ LRESULT CALLBACK Wndproc(
 			
 		}break;
 
-		case WM_EXITSIZEMOVE:
+		case WM_SIZING:
 		{
-			HMONITOR mon = MonitorFromWindow(window_handle, MONITOR_DEFAULTTONEAREST);
+			const float TARGET_ASPECT = 6613.0f / 1903.0f;
+			RECT *r = (RECT*)l_param;
 
+			DWORD style = WS_OVERLAPPEDWINDOW;
+			RECT border = {0};
+			AdjustWindowRect(&border, style, FALSE);
+			int border_w = (border.right - border.left);
+			int border_h = (border.bottom - border.top);
+
+			HMONITOR mon = MonitorFromRect(r, MONITOR_DEFAULTTONEAREST);
 			MONITORINFO mi = {0};
 			mi.cbSize = sizeof(mi);
 			GetMonitorInfo(mon, &mi);
-
 			int monitor_w = mi.rcMonitor.right - mi.rcMonitor.left;
 			int monitor_h = mi.rcMonitor.bottom - mi.rcMonitor.top;
 
-			int client_w = monitor_w;
-			int client_h = (int)(1903.0f / 6613.0f * client_w);
+			int max_client_w = monitor_w;
+			int max_client_h = monitor_h;
 
-			DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+			int client_w = (r->right - r->left) - border_w;
+			int client_h = (r->bottom - r->top) - border_h;
 
-			RECT r = {0,0,client_w,client_h};
-			AdjustWindowRect(&r, style, FALSE);
-
-			int win_w = r.right - r.left;
-			int win_h = r.bottom - r.top;
-
-			SetWindowPos(
-				window_handle,
-				NULL,
-				mi.rcMonitor.left,
-				mi.rcMonitor.top,
-				win_w,
-				win_h,
-				SWP_NOZORDER
-			);
+			switch(w_param)
+			{
+				case WMSZ_TOP:
+				case WMSZ_BOTTOM:
+				{
+					int new_w = (int)(client_h * TARGET_ASPECT);
+					if (new_w > max_client_w) {
+						new_w = max_client_w;
+						int new_h = (int)(new_w / TARGET_ASPECT) + border_h;
+						if (w_param == WMSZ_TOP)
+							r->top = r->bottom - new_h;
+						else
+							r->bottom = r->top + new_h;
+					}
+					r->right = r->left + new_w + border_w;
+					break;
+				}
+				default:
+				{
+					int new_h = (int)(client_w / TARGET_ASPECT);
+					if (new_h > max_client_h) {
+						new_h = max_client_h;
+						client_w = (int)(new_h * TARGET_ASPECT);
+						r->right = r->left + client_w + border_w;
+					}
+					new_h += border_h;
+					if (w_param == WMSZ_TOPLEFT || w_param == WMSZ_TOPRIGHT)
+						r->top = r->bottom - new_h;
+					else
+						r->bottom = r->top + new_h;
+					break;
+				}
+			}
+			return TRUE;
 		}break;
 
 		case WM_SIZE:
@@ -188,6 +443,16 @@ LRESULT CALLBACK Wndproc(
 			}
 		} break;
 
+		case WM_DEVICECHANGE:
+		{
+			if (w_param == DBT_DEVICEARRIVAL || w_param == DBT_DEVNODES_CHANGED) {
+				if (!midi_selecting) {
+					reset_midi();
+					init_midi(midi_confirmed_index);
+				}
+			}
+		} break;
+
 		case WM_SYSKEYDOWN: {
 			//F10 to set octave switch delay
 			if (w_param == VK_F10 && rebind_target_note == -1) {
@@ -209,6 +474,45 @@ LRESULT CALLBACK Wndproc(
 			bool shift_pressed = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 			bool alt_pressed = (GetKeyState(VK_MENU) & 0x8000) != 0;
 			
+			//Right Control to select MIDI device
+			if (w_param == VK_CONTROL && (l_param & (1 << 24))) {
+				UINT count = midiInGetNumDevs();
+				if (count == 0) {
+					strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "No MIDI devices found");
+					text_needs_update = 1;
+					return 0;
+				}
+				if (!midi_selecting) {
+					midi_selecting = true;
+					midi_selected_index = midi_confirmed_index;
+				} else {
+					midi_selected_index = (midi_selected_index + 1) % count;
+				}
+				show_midi_device_selection();
+				return 0;
+			}
+
+			if (midi_selecting) {
+				if (w_param == VK_RETURN) {
+					midi_selecting = false;
+					init_midi(midi_selected_index);
+					MIDIINCAPSA caps;
+					midiInGetDevCapsA(midi_confirmed_index, &caps, sizeof(caps));
+					char buf[256];
+					sprintf_s(buf, sizeof(buf), "Connected to: %s", caps.szPname);
+					strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
+					text_needs_update = 1;
+					return 0;
+				}
+				if (w_param == VK_ESCAPE) {
+					midi_selecting = false;
+					strcpy_s(midi_key_display, MAX_INPUT_LENGTH, "MIDI selection cancelled");
+					text_needs_update = 1;
+					return 0;
+				}
+				return 0;
+			}
+
 			if (editing_octave_delay) {
 				if (w_param == VK_RETURN) {
 					if (octave_delay_input_length > 0) {
@@ -575,165 +879,8 @@ void convert_tex_rect_to_window(
     *out_h = sh * (2.0f * frame_display_h);
 }
 
-void CALLBACK midi_callback(HMIDIIN hMidiIn, UINT wMsg,
-                            DWORD_PTR dwInstance,
-                            DWORD_PTR msg, DWORD_PTR timestamp, allocator_i *allocator) 
-{
-    if (wMsg != MIM_DATA)
-        return;
 
-    DWORD data = (DWORD)msg;
-    int status = data & 0xF0; 
-    int note   = (data >> 8) & 0x7F;
-    int vel    = (data >> 16) & 0x7F;
-
-    char buf[256];
-    int starter_note = cstarter_note();
-    
-    if (status == 0x90 && vel > 0)
-    {
-        // REBINDING MODE 
-        if (app_mode == MODE_REBINDING_NOTES) {
-            rebind_target_note = note;
-            
-            int offset = note - starter_note;
-            sprintf_s(buf, sizeof(buf), 
-                     "MIDI note %d (offset %d) - Press keybind...", 
-                     note, offset);
-            strcpy_s(midi_key_display, MAX_INPUT_LENGTH, buf);
-            text_needs_update = 1;
-            
-            DEBUG_LOG(buf);
-            DEBUG_LOG("\n");
-            return;
-        }
-        
-        if (app_mode != MODE_NORMAL) {
-            return;
-        }
-        
-        bool octave_shifted = false;
-
-        // NORMAL MODE
-        if(note >= starter_note + 13) {
-            shift_octave(true);
-			octave_shifted = true;
-        }
-        else if(note <= starter_note - 1) {
-            shift_octave(false);
-			octave_shifted = true;
-        }
-
-		 if (octave_shifted) {
-			if(get_gw2_ping(allocator, &gw2_ping))
-			{
-				Sleep(gw2_ping);
-			}
-			else
-			{
-            	Sleep(octave_shift_delay); 
-			}
-            starter_note = cstarter_note(); 
-        }
-        
-        key_pressed_note[note] = 1;
-        
-        KeyCombo *combo = midi_note_to_key_combo(note, starter_note);
-        
-        if (combo == NULL) {
-            return;
-        }
-        
-        //Release modifiers
-        INPUT release_mods[3] = {0};
-        int mod_count = 0;
-        
-        //Shift
-        if (!combo->use_shift) {
-            release_mods[mod_count].type = INPUT_KEYBOARD;
-            release_mods[mod_count].ki.wScan = 42;
-            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-            mod_count++;
-        }
-        
-        //Ctrl
-        if (!combo->use_ctrl) {
-            release_mods[mod_count].type = INPUT_KEYBOARD;
-            release_mods[mod_count].ki.wScan = 29;
-            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-            mod_count++;
-        }
-        
-        //Alt
-        if (!combo->use_alt) {
-            release_mods[mod_count].type = INPUT_KEYBOARD;
-            release_mods[mod_count].ki.wScan = 56;
-            release_mods[mod_count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-            mod_count++;
-        }
-
-        //Releases	
-        if (mod_count > 0) {
-            SendInput(mod_count, release_mods, sizeof(INPUT));
-        }
-        press_key_combo(combo);
-		note_combo_map[note] = *combo;
-        
-        char display_char = midi_note_to_display_char(note, starter_note);
-        char combo_str[128];
-        get_combo_display_string(combo, display_char, combo_str, sizeof(combo_str));
-        
-        //Update piano visual
-        for (int i = 0; i < NUM_KEYS; i++) {
-            if (piano_keys[i].midi_note == note) {
-                piano_keys[i].is_pressed = 1;
-                break;
-            }
-        }
-        
-        if (midi_display_length < MAX_INPUT_LENGTH - 20) {
-            sprintf_s(buf, sizeof(buf), "%s ", combo_str);
-            strcat_s(midi_key_display, MAX_INPUT_LENGTH, buf);
-            midi_display_length = (int)strlen(midi_key_display);
-
-            //Auto scroll
-            if (midi_display_length > viewport_start + viewport_max_chars) {
-                viewport_start = midi_display_length - viewport_max_chars;
-            }
-
-            text_needs_update = 1;
-        }
-    }
-    
-    if(status == 0x80) {
-        if (app_mode != MODE_NORMAL) {
-            return;
-        }
-        
-        key_pressed_note[note] = 0;
-         KeyCombo *combo = &note_combo_map[note];
-
-        if (combo == NULL) {
-            return;
-        }
-        
-        release_key_combo(combo);
-        
-        for (int i = 0; i < NUM_KEYS; i++) {
-            if (piano_keys[i].midi_note == note) {
-                piano_keys[i].is_pressed = 0;
-                break;
-            }
-        }
-
-		note_combo_map[note].scancode = 0;
-		note_combo_map[note].use_shift = false;
-		note_combo_map[note].use_ctrl = false;
-		note_combo_map[note].use_alt = false;
-    }
-}
-
-
+/*
 void init_midi()
 {
     HMIDIIN midi_in;
@@ -759,7 +906,7 @@ void init_midi()
 
     midiInStart(midi_in);
     DEBUG_LOG("MIDI listening...\n");
-}
+}*/
 
 
 int CALLBACK WinMain(
@@ -789,7 +936,7 @@ int       nShowCmd)
 
 	int client_w = monitor_w;
 	int client_h = (int)(1903.0f / 6613.0f * client_w);
-	DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+	DWORD style = WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX;
 	DWORD exStyle = 0;
 	RECT r = {0, 0, client_w, client_h};
 	AdjustWindowRectEx(&r, style, FALSE, exStyle);
@@ -812,6 +959,7 @@ int       nShowCmd)
 	0);
 
 	allocator_i *allocator = get_simple_allocator();
+	g_allocator = allocator;
 
     input_text = (char*)allocator->realloc(allocator->inst, NULL, MAX_INPUT_LENGTH, 0);
     midi_key_display = (char*)allocator->realloc(allocator->inst, NULL, MAX_INPUT_LENGTH, 0);
@@ -955,7 +1103,7 @@ int       nShowCmd)
 	get_gw2_ping(allocator,&gw2_ping);
 
 	init_keys();
-	init_midi();
+	init_midi(0);
 	load_keybindings("keybindings.txt");
 
 	parse_json("Assets/Fonts/atlas.json");
