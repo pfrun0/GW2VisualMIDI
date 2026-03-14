@@ -18,6 +18,30 @@ void print_ip_from_decimal(DWORD decimal_ip)
     DEBUG_LOG(buf);
 }
 
+static DWORD last_rescan_tick = 0;
+static bool no_admin = false;
+#define RESCAN_INTERVAL_MS 5000
+
+bool enable_tcp_estats(MIB_TCPROW *row)
+{
+    TCP_ESTATS_PATH_RW_v0 rw = {0};
+    rw.EnableCollection = TRUE;
+    DWORD result = SetPerTcpConnectionEStats(
+        row,
+        TcpConnectionEstatsPath,
+        (PUCHAR)&rw, 0, sizeof(rw),
+        0
+    );
+
+    if (result == ERROR_ACCESS_DENIED) {
+    DEBUG_LOG("No admin privileges, cannot measure ping\n");
+    no_admin = true;
+    return false;
+    }
+
+    return result == NO_ERROR;
+}
+
 bool find_gw2_connection(allocator_i *allocator)
 {
     DWORD table_size = tcp_table_capacity;
@@ -79,6 +103,8 @@ bool find_gw2_connection(allocator_i *allocator)
         probe.dwLocalPort  = row->dwLocalPort;
         probe.dwRemoteAddr = row->dwRemoteAddr;
         probe.dwRemotePort = row->dwRemotePort;
+
+        if (!enable_tcp_estats(&probe)) continue;
 
         TCP_ESTATS_PATH_ROD_v0 path_rod = {0};
         DWORD estat_result = GetPerTcpConnectionEStats(
@@ -142,23 +168,17 @@ bool find_gw2_ping(DWORD *out_rtt_ms)
     return true;
 }
 
-static DWORD last_rescan_tick = 0;
-#define RESCAN_INTERVAL_MS 5000
-
 bool get_gw2_ping(allocator_i *allocator, DWORD *out_rtt_ms)
 {
+    if (no_admin) return false;
+
     DWORD now = GetTickCount();
     bool force_rescan = (now - last_rescan_tick) > RESCAN_INTERVAL_MS;
 
-    if (!force_rescan && find_gw2_ping(out_rtt_ms)) {
-        return true;
+    if (force_rescan || !gw2_conn.is_valid) {
+        last_rescan_tick = now;
+        if (!find_gw2_connection(allocator)) return false;
     }
 
-    last_rescan_tick = now;
-
-    if (find_gw2_connection(allocator)) {
-        return find_gw2_ping(out_rtt_ms);
-    }
-
-    return false;
+    return find_gw2_ping(out_rtt_ms);
 }

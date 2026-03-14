@@ -123,7 +123,7 @@ void CALLBACK midi_callback(HMIDIIN hMidiIn, UINT wMsg,
         }
 
 		 if (octave_shifted) {
-			if(get_gw2_ping(g_allocator, &gw2_ping))
+			if(get_gw2_ping(g_allocator, &gw2_ping) && gw2_ping<=1000  && (gw2_ping > octave_shift_delay))
 			{
 				Sleep(gw2_ping);
 			}
